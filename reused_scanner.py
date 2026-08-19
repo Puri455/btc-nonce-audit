@@ -40,12 +40,9 @@ def get_address_data(address):
     """Fetch address data from blockchain.info"""
     url = f"https://blockchain.info/rawaddr/{address}"
     try:
-        print(f"📡 Fetching data from: {url}")
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        data = response.json()
-        print(f"✅ Data received successfully!")
-        return data
+        return response.json()
     except requests.exceptions.RequestException as e:
         print(f"\n❌ Error fetching data: {e}")
         print("Please check your internet connection or the Bitcoin address.")
@@ -53,7 +50,6 @@ def get_address_data(address):
 
 def extract_r_value(script):
     """Extract R value from script signature"""
-    # R value is typically at position 10-74 in DER encoded signature
     if len(script) >= 74:
         return script[10:74]
     return None
@@ -62,37 +58,56 @@ def main():
     print_logo()
     print("WELCOME TO Reused R Scanner 0.3!\n")
     
-    # Get address input with proper prompt
-    print("Enter the Bitcoin address to scan: ", end="", flush=True)
-    address = sys.stdin.readline().strip()
+    # Get address input - FIXED to properly prompt and wait
+    try:
+        address = input("Enter the Bitcoin address to scan: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n\n❌ Input cancelled.")
+        sys.exit(1)
     
     if not address:
         print("❌ Address cannot be empty!")
         sys.exit(1)
     
-    print(f"\n🔍 Scanning address: {address}")
+    print(f"📡 Fetching data for address: {address}")
     
-    address_data = get_address_data(address)
+    try:
+        address_data = get_address_data(address)
+    except Exception as e:
+        print(f"❌ Failed to fetch data: {e}")
+        sys.exit(1)
     
-    # Debug: Show what we received
-    # print(f"Debug: API Response Keys: {address_data.keys()}")
+    # Check if we got valid data
+    if not address_data:
+        print("❌ No data received from API")
+        sys.exit(1)
     
-    # Check if the response contains expected data
+    # Check for API error
     if 'error' in address_data:
         print(f"❌ API Error: {address_data['error']}")
         sys.exit(1)
     
-    # Handle different API response structures
+    # Handle different API response structures - FIXED to handle missing keys
     if 'n_tx' in address_data:
         num_txs = address_data['n_tx']
     elif 'txs' in address_data:
         num_txs = len(address_data['txs'])
     else:
-        print("❌ Unexpected API response format. Cannot process transactions.")
-        print("API Response Structure:", json.dumps(list(address_data.keys()), indent=2))
-        sys.exit(1)
+        # Try to find transactions in the response
+        print("⚠️  Unexpected API response format")
+        print(f"Response keys: {list(address_data.keys())}")
+        print("Attempting to extract transactions from response...")
+        
+        # Check if there's a 'txs' key or similar
+        if 'txs' in address_data:
+            num_txs = len(address_data['txs'])
+        else:
+            print("❌ Cannot find transaction data in API response")
+            print("Raw response (first 500 chars):")
+            print(json.dumps(address_data, indent=2)[:500])
+            sys.exit(1)
     
-    print(f"\n✅ Address: {address}")
+    print(f"\n✅ Data for address: {address}")
     print(f"📊 Number of transactions: {num_txs}\n")
 
     if num_txs == 0:
@@ -100,11 +115,17 @@ def main():
         sys.exit(0)
 
     inputs = []
-    tx_details = []  # Store transaction details with their inputs
+    tx_details = []
     
     print("🔄 Processing transactions...")
     
-    for tx in tqdm(address_data['txs'], desc="Processing transactions", unit="tx"):
+    # Process transactions with progress bar
+    tx_list = address_data.get('txs', [])
+    if not tx_list:
+        print("❌ No transactions found in the response")
+        sys.exit(1)
+    
+    for tx in tqdm(tx_list, desc="Processing transactions", unit="tx"):
         print("\n" + "="*80)
         print(f"📝 Transaction hash: {tx.get('hash', 'N/A')}")
         print(f"📥 Number of inputs: {tx.get('vin_sz', 0)}")
@@ -114,19 +135,16 @@ def main():
             if script and len(script) >= 74:
                 inputs.append(script)
                 r_value = extract_r_value(script)
-                # Store transaction details for each input
                 tx_details.append({
                     'tx_hash': tx.get('hash', 'Unknown'),
                     'input_index': idx,
                     'script': script,
                     'r_value': r_value,
-                    'prev_out': input_script.get('prev_out', {}),
-                    'sequence': input_script.get('sequence', 'N/A')
+                    'prev_out': input_script.get('prev_out', {})
                 })
     
     if len(inputs) < 2:
         print("\nℹ️ Not enough inputs to compare (need at least 2).")
-        print("   Need transactions with multiple inputs to check for reused R values.")
         sys.exit(0)
     
     print("\n🔍 Comparing input scripts for reused R values...\n")
@@ -136,27 +154,22 @@ def main():
     input_len = len(inputs)
     total_comparisons = (input_len - 1) * input_len // 2
     
-    print(f"📊 Comparing {input_len} inputs ({total_comparisons} pairs)...")
-    
     with tqdm(total=total_comparisons, desc="Comparing inputs", unit="cmp") as pbar:
         for i in range(input_len - 1):
             for j in range(i + 1, input_len):
                 if inputs[i][10:74] == inputs[j][10:74]:
                     alert_count += 1
-                    # Store pair information
                     reused_pairs.append({
                         'r_value': inputs[i][10:74],
                         'input1': tx_details[i],
-                        'input2': tx_details[j],
-                        'pair_number': alert_count
+                        'input2': tx_details[j]
                     })
                 pbar.update(1)
 
     print("\n" + "="*80)
     
     if alert_count == 0:
-        print("✅ No Reused R values Found - Wallet seems safe!")
-        print("   All transactions use unique R values.")
+        print("✅ No Reused R values Found, seems safe!")
         print("="*80)
     else:
         print(f"⚠️  ALERT: Total reused R values found: {alert_count}")
@@ -178,6 +191,7 @@ def main():
             print(f"  🏷️  Transaction Hash: {pair['input1']['tx_hash']}")
             print(f"  🔢 Input Index: {pair['input1']['input_index']}")
             print(f"  🔑 R Value: {pair['input1']['r_value']}")
+            print(f"  📝 Script: {pair['input1']['script'][:50]}..." if len(pair['input1']['script']) > 50 else f"  📝 Script: {pair['input1']['script']}")
             
             print("\n" + "-"*40)
             print("📥 INPUT 2 DETAILS:")
@@ -185,6 +199,7 @@ def main():
             print(f"  🏷️  Transaction Hash: {pair['input2']['tx_hash']}")
             print(f"  🔢 Input Index: {pair['input2']['input_index']}")
             print(f"  🔑 R Value: {pair['input2']['r_value']}")
+            print(f"  📝 Script: {pair['input2']['script'][:50]}..." if len(pair['input2']['script']) > 50 else f"  📝 Script: {pair['input2']['script']}")
             
             print("\n" + "-"*40)
             print("⚠️  SECURITY ANALYSIS:")
@@ -195,7 +210,6 @@ def main():
             print(f"  🔓 This means the same random nonce (R value) was reused")
             print(f"  💀 This is a CRITICAL security vulnerability!")
             print(f"  🎯 An attacker could potentially recover the private key")
-            print(f"     using the two signatures with the same R value.")
             print("\n")
         
         print("="*80)
@@ -217,7 +231,5 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ An unexpected error occurred: {e}")
-        import traceback
-        traceback.print_exc()
         print("Please try again or check the address format.")
         sys.exit(1)
