@@ -1,8 +1,14 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import json
 import requests
 import sys
+import time
+import hashlib
 from tqdm import tqdm
 from collections import defaultdict
+from typing import Optional, List, Dict, Any, Tuple
 
 def print_logo():
     logo = r"""
@@ -23,81 +29,245 @@ $$    $$ |$$    $$/ $$    |    $$  $$<
 $$$$$$$$ |$$$$$$$/  $$$$$/      $$$$  \                      
 $$ |  $$ |$$ |      $$ |_____  $$ /$$  |                     
 $$ |  $$ |$$ |      $$       |$$ |  $$ |                     
-$$/   $$/ $$/       $$$$$$$$/ $$/   $$/
+$$/   $$/ $$/       $$$$$$$$/ $$/   $$/                      
 
 ###############################
 #                             #
 #        CryptoAppex          #
 # BTC Reused R Value Scanner  #
 #            Tool             #
-#            V0.5             #
+#            V0.6             #
 #                             #
 ###############################
     """
     print(logo)
 
+def der_decode_length(data: bytes, pos: int) -> Tuple[int, int]:
+    """Decode DER length field"""
+    if pos >= len(data):
+        return 0, pos
+    
+    if data[pos] < 0x80:
+        return data[pos], pos + 1
+    
+    length_len = data[pos] & 0x7f
+    if length_len > 4:  # Too long for our purposes
+        return 0, pos + 1 + length_len
+    
+    length = 0
+    for i in range(length_len):
+        if pos + 1 + i >= len(data):
+            return 0, pos + 1 + length_len
+        length = (length << 8) + data[pos + 1 + i]
+    
+    return length, pos + 1 + length_len
 
-def get_address_data(address):
-    url = f"https://blockchain.info/rawaddr/{address}"
+def extract_r_value_from_script(script: str) -> Optional[str]:
+    """Extract R value from script signature using proper DER parsing"""
+    if not script:
+        return None
+    
     try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Error fetching data: {e}")
-        sys.exit(1)
-
-def extract_r_value(script):
-    """Extract R value from script signature (positions 10-74)"""
-    if len(script) >= 74:
-        return script[10:74]
+        # Convert hex string to bytes
+        if isinstance(script, str):
+            if len(script) % 2 != 0:
+                return None
+            script_bytes = bytes.fromhex(script)
+        else:
+            script_bytes = script
+        
+        # Find DER sequence marker (0x30)
+        for i in range(len(script_bytes) - 2):
+            if script_bytes[i] == 0x30:  # DER sequence
+                # Try to parse DER at this position
+                try:
+                    # Parse the sequence
+                    _, pos = der_decode_length(script_bytes, i + 1)
+                    if pos >= len(script_bytes):
+                        continue
+                    
+                    # Look for integer marker (0x02) - this should be R
+                    # Skip potential version or other fields
+                    temp_pos = pos
+                    while temp_pos < len(script_bytes) - 2:
+                        if script_bytes[temp_pos] == 0x02:
+                            r_len, r_pos = der_decode_length(script_bytes, temp_pos + 1)
+                            if r_pos + r_len <= len(script_bytes):
+                                r_value = script_bytes[r_pos:r_pos + r_len]
+                                
+                                # Remove leading zero if present (for positive numbers)
+                                if len(r_value) > 32 and r_value[0] == 0x00:
+                                    r_value = r_value[1:]
+                                
+                                # R value should be 32 bytes or less
+                                if 0 < len(r_value) <= 32:
+                                    return r_value.hex()
+                        temp_pos += 1
+                        
+                except Exception:
+                    continue
+                    
+    except Exception:
+        return None
+    
     return None
 
-def analyze_transactions(address_data):
-    """Analyze transactions and extract R values"""
+def parse_der_signature(script: str) -> Optional[Dict[str, str]]:
+    """Parse DER signature to extract R and S values"""
+    if not script:
+        return None
+    
+    try:
+        if isinstance(script, str):
+            if len(script) % 2 != 0:
+                return None
+            script_bytes = bytes.fromhex(script)
+        else:
+            script_bytes = script
+        
+        # Find DER sequence
+        for i in range(len(script_bytes) - 4):
+            if script_bytes[i] == 0x30:
+                try:
+                    _, pos = der_decode_length(script_bytes, i + 1)
+                    if pos >= len(script_bytes):
+                        continue
+                    
+                    # Parse R value
+                    r_value = None
+                    s_value = None
+                    current_pos = pos
+                    
+                    # Look for R (first integer)
+                    while current_pos < len(script_bytes) - 2:
+                        if script_bytes[current_pos] == 0x02:
+                            r_len, r_pos = der_decode_length(script_bytes, current_pos + 1)
+                            if r_pos + r_len <= len(script_bytes):
+                                r_bytes = script_bytes[r_pos:r_pos + r_len]
+                                if len(r_bytes) > 32 and r_bytes[0] == 0x00:
+                                    r_bytes = r_bytes[1:]
+                                if 0 < len(r_bytes) <= 32:
+                                    r_value = r_bytes.hex()
+                                    current_pos = r_pos + r_len
+                                    break
+                        current_pos += 1
+                    
+                    # Look for S value (second integer)
+                    while current_pos < len(script_bytes) - 2:
+                        if script_bytes[current_pos] == 0x02:
+                            s_len, s_pos = der_decode_length(script_bytes, current_pos + 1)
+                            if s_pos + s_len <= len(script_bytes):
+                                s_bytes = script_bytes[s_pos:s_pos + s_len]
+                                if len(s_bytes) > 32 and s_bytes[0] == 0x00:
+                                    s_bytes = s_bytes[1:]
+                                if 0 < len(s_bytes) <= 32:
+                                    s_value = s_bytes.hex()
+                                    break
+                        current_pos += 1
+                    
+                    if r_value and s_value:
+                        return {'r': r_value, 's': s_value}
+                        
+                except Exception:
+                    continue
+                    
+    except Exception:
+        pass
+    
+    return None
+
+def get_address_data(address: str, max_retries: int = 3) -> Dict[str, Any]:
+    """Fetch address data from blockchain.info with retry logic"""
+    url = f"https://blockchain.info/rawaddr/{address}"
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=30)
+            
+            if response.status_code == 429:  # Rate limited
+                wait_time = 2 ** attempt
+                print(f"⏳ Rate limited, waiting {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+                
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                print(f"❌ Error fetching data: {e}")
+                sys.exit(1)
+            print(f"⚠️ Attempt {attempt + 1} failed, retrying...")
+            time.sleep(1)
+    
+    return {}
+
+def analyze_transactions(address: str, address_data: Dict[str, Any]) -> Tuple[List[str], List[Dict]]:
+    """Analyze transactions and extract R values with proper parsing"""
     inputs = []
     tx_details = []
+    found_r_values = set()
     
     print("\n" + "═"*80)
     print("📊 ANALYZING TRANSACTIONS")
     print("═"*80)
     
-    for tx in tqdm(address_data.get('txs', []), desc="Processing transactions", unit="tx"):
+    # Get transactions
+    txs = address_data.get('txs', [])
+    num_txs = len(txs)
+    
+    if num_txs == 0:
+        print("❌ No transactions found for this address")
+        return inputs, tx_details
+    
+    print(f"📊 Processing {num_txs} transactions...")
+    
+    for tx_idx, tx in enumerate(tqdm(txs, desc="Processing transactions", unit="tx")):
         tx_hash = tx.get('hash', 'Unknown')
         vin_sz = tx.get('vin_sz', 0)
         
-        # Show transaction info (but not too verbose)
-        if vin_sz > 0:
-            print(f"\n📋 TX: {tx_hash[:20]}... | Inputs: {vin_sz}")
-        
+        # Process each input
         for idx, input_script in enumerate(tx.get('inputs', [])):
             script = input_script.get('script', '')
-            r_value = extract_r_value(script)
             
-            if r_value:
+            # Parse DER signature
+            der_parts = parse_der_signature(script)
+            if der_parts and der_parts.get('r'):
+                r_value = der_parts['r']
+                
+                # Store input data
                 inputs.append(script)
                 tx_details.append({
                     'tx_hash': tx_hash,
+                    'tx_index': tx_idx,
                     'input_index': idx,
                     'script': script,
                     'r_value': r_value,
-                    'prev_out': input_script.get('prev_out', {})
+                    's_value': der_parts.get('s', ''),
+                    'prev_out': input_script.get('prev_out', {}),
+                    'address': address  # Store wallet address
                 })
-                print(f"  ✓ Input #{idx}: R-value extracted: {r_value[:20]}...")
+                
+                if r_value not in found_r_values:
+                    found_r_values.add(r_value)
+                    # Show first 10 R values found
+                    if len(found_r_values) <= 10:
+                        print(f"  🔑 Found R value: {r_value[:20]}... (TX: {tx_hash[:20]}...)")
     
+    print(f"\n✅ Found {len(found_r_values)} unique R values across {len(inputs)} inputs")
     return inputs, tx_details
 
-def find_reused_r_values(inputs, tx_details):
+def find_reused_r_values(inputs: List[str], tx_details: List[Dict]) -> List[Dict]:
     """Find reused R values and return detailed information"""
     # Group by R value
     r_value_groups = defaultdict(list)
     
-    for i, script in enumerate(inputs):
-        r_val = extract_r_value(script)
+    for i, detail in enumerate(tx_details):
+        r_val = detail.get('r_value')
         if r_val:
             r_value_groups[r_val].append({
                 'index': i,
-                'tx_detail': tx_details[i]
+                'tx_detail': detail
             })
     
     # Find reused R values (groups with more than 1)
@@ -110,23 +280,49 @@ def find_reused_r_values(inputs, tx_details):
                     reused_pairs.append({
                         'r_value': r_val,
                         'input1': items[i]['tx_detail'],
-                        'input2': items[j]['tx_detail']
+                        'input2': items[j]['tx_detail'],
+                        'total_uses': len(items)
                     })
     
     return reused_pairs
 
-def display_results(reused_pairs, num_txs, total_inputs):
+def display_results(reused_pairs: List[Dict], address: str, num_txs: int, total_inputs: int):
     """Display detailed results"""
     if not reused_pairs:
         print("\n" + "="*80)
-        print("✅ No Reused R values Found, seems safe!")
+        print("✅ No Reused R values Found - Wallet appears safe!")
         print("="*80)
         return
     
     print("\n" + "="*80)
-    print(f"⚠️  ALERT: Total reused R values found: {len(reused_pairs)}")
-    print("⚠️  WARNING: Wallet is not safe!")
+    print(f"⚠️  ALERT: {len(reused_pairs)} reused R value pairs found!")
+    print("⚠️  WARNING: Wallet is NOT safe!")
     print("="*80)
+    
+    # Show wallet address prominently
+    print("\n" + "═"*80)
+    print("🔴 VULNERABLE WALLET ADDRESS")
+    print("═"*80)
+    print(f"  💰 {address}")
+    print("═"*80)
+    
+    # Group by R value to show which R values are reused
+    r_value_summary = defaultdict(list)
+    for pair in reused_pairs:
+        r_value_summary[pair['r_value']].append(pair)
+    
+    print("\n" + "═"*80)
+    print("📊 SUMMARY OF REUSED R VALUES")
+    print("═"*80)
+    for r_val, pairs in r_value_summary.items():
+        total_uses = pairs[0]['total_uses']
+        affected_txs = set()
+        for p in pairs:
+            affected_txs.add(p['input1']['tx_hash'])
+            affected_txs.add(p['input2']['tx_hash'])
+        print(f"\n  🔑 R Value: {r_val}")
+        print(f"     • Used {total_uses} times across {len(affected_txs)} transactions")
+        print(f"     • {len(pairs)} vulnerable pairs found")
     
     print("\n" + "═"*80)
     print("🔍 DETAILED REUSED R VALUE INFORMATION")
@@ -140,6 +336,7 @@ def display_results(reused_pairs, num_txs, total_inputs):
         
         # R Value
         print(f"\n🔑 R VALUE: {pair['r_value']}")
+        print(f"📊 Used {pair['total_uses']} times total")
         print("─"*40)
         
         # Input 1
@@ -147,36 +344,28 @@ def display_results(reused_pairs, num_txs, total_inputs):
         print("─"*40)
         print(f"  🏷️  Transaction Hash: {pair['input1']['tx_hash']}")
         print(f"  🔢 Input Index: {pair['input1']['input_index']}")
+        print(f"  💰 Wallet: {address}")
         r_val1 = pair['input1']['r_value']
         print(f"  🔑 R Value: {r_val1}")
-        
-        # Show script (truncated if too long)
-        script1 = pair['input1']['script']
-        if len(script1) > 100:
-            print(f"  📝 Script: {script1[:100]}...")
-        else:
-            print(f"  📝 Script: {script1}")
+        if pair['input1'].get('s_value'):
+            print(f"  🔐 S Value: {pair['input1']['s_value'][:20]}...")
         
         # Input 2
         print("\n📍 INPUT 2:")
         print("─"*40)
         print(f"  🏷️  Transaction Hash: {pair['input2']['tx_hash']}")
         print(f"  🔢 Input Index: {pair['input2']['input_index']}")
+        print(f"  💰 Wallet: {address}")
         r_val2 = pair['input2']['r_value']
         print(f"  🔑 R Value: {r_val2}")
-        
-        # Show script (truncated if too long)
-        script2 = pair['input2']['script']
-        if len(script2) > 100:
-            print(f"  📝 Script: {script2[:100]}...")
-        else:
-            print(f"  📝 Script: {script2}")
+        if pair['input2'].get('s_value'):
+            print(f"  🔐 S Value: {pair['input2']['s_value'][:20]}...")
         
         # Vulnerability explanation
         print("\n" + "─"*40)
         print("⚠️  VULNERABILITY DETAILS:")
         print("─"*40)
-        print(f"  🔴 Same R value used in two different transactions")
+        print(f"  🔴 Same R value used in multiple transactions from wallet: {address}")
         print(f"  🔴 Transaction 1: {pair['input1']['tx_hash'][:30]}...")
         print(f"  🔴 Transaction 2: {pair['input2']['tx_hash'][:30]}...")
         print("  ⚠️  The same random nonce (R) was reused")
@@ -196,6 +385,7 @@ def display_results(reused_pairs, num_txs, total_inputs):
     print("\n" + "═"*80)
     print("📊 SUMMARY STATISTICS")
     print("═"*80)
+    print(f"  • Vulnerable Wallet: {address}")
     print(f"  • Total transactions analyzed: {num_txs}")
     print(f"  • Total inputs extracted: {total_inputs}")
     print(f"  • Reused R value pairs found: {len(reused_pairs)}")
@@ -216,6 +406,7 @@ def display_results(reused_pairs, num_txs, total_inputs):
     print("\n" + "═"*80)
     print("🚨 CRITICAL SECURITY RECOMMENDATIONS")
     print("═"*80)
+    print(f"  ❌ Wallet {address} is COMPROMISED!")
     print("  ❌ DO NOT use this wallet anymore!")
     print("  🔴 Move all funds to a new, secure wallet IMMEDIATELY.")
     print("  🔴 The private key for this address IS COMPROMISED.")
@@ -233,7 +424,7 @@ def display_results(reused_pairs, num_txs, total_inputs):
 
 def main():
     print_logo()
-    print("WELCOME TO Reused R Scanner 0.5!\n")
+    print("WELCOME TO Reused R Scanner 0.6!\n")
     
     address = input("Enter the Bitcoin address to scan: ").strip()
     if not address:
@@ -247,6 +438,10 @@ def main():
         address_data = get_address_data(address)
         num_txs = address_data.get('n_tx', 0)
         
+        if num_txs == 0:
+            print(f"❌ No transactions found for address: {address}")
+            sys.exit(1)
+        
         print(f"\n📊 Address: {address}")
         print(f"📊 Total Transactions: {num_txs}")
         print("═"*80)
@@ -256,7 +451,7 @@ def main():
         sys.exit(1)
     
     # Analyze transactions
-    inputs, tx_details = analyze_transactions(address_data)
+    inputs, tx_details = analyze_transactions(address, address_data)
     
     if not inputs:
         print("\n❌ No valid input scripts with R values found!")
@@ -269,7 +464,7 @@ def main():
     reused_pairs = find_reused_r_values(inputs, tx_details)
     
     # Display results
-    display_results(reused_pairs, num_txs, len(inputs))
+    display_results(reused_pairs, address, num_txs, len(inputs))
 
 if __name__ == "__main__":
     main()
