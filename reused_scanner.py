@@ -3,6 +3,19 @@ import requests
 import sys
 from tqdm import tqdm
 
+# ANSI color codes for terminal output
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    END = '\033[0m'
+
 def print_logo():
     logo = r"""
   ______   _______   __      __  _______   ________  ______  
@@ -29,7 +42,7 @@ $$/   $$/ $$/       $$$$$$$$/ $$/   $$/
 #        CryptoAppex          #
 # BTC Reused R Value Scanner  #
 #            Tool             #
-#            V0.4             #
+#            V0.5             #
 #                             #
 ###############################
     """
@@ -51,7 +64,7 @@ def get_address_data(address):
 
 def main():
     print_logo()
-    print("WELCOME TO Reused R Scanner 0.4!\n")
+    print("WELCOME TO Reused R Scanner 0.5!\n")
     
     # Get address input
     try:
@@ -115,9 +128,9 @@ def main():
         sys.exit(1)
     
     for tx in tqdm(tx_list, desc="Processing transactions", unit="tx"):
-        # Print transaction details (keeping the original format)
+        # Print transaction details with colored hash
         print("\n" + "="*80)
-        print(f"Transaction hash: {tx.get('hash', 'N/A')}")
+        print(f"{Colors.CYAN}Transaction hash:{Colors.END} {Colors.YELLOW}{tx.get('hash', 'N/A')}{Colors.END}")
         print(f"Number of inputs: {tx.get('vin_sz', 0)}")
         
         for idx, input_script in enumerate(tx.get('inputs', [])):
@@ -162,73 +175,73 @@ def main():
     print("\n" + "="*80)
     
     if alert_count == 0:
-        print("✅ No Reused R values Found, seems safe!")
+        print(f"{Colors.GREEN}✅ No Reused R values Found, seems safe!{Colors.END}")
         print("="*80)
     else:
-        print(f"⚠️  ALERT: Total reused R values found: {alert_count}")
-        print(f"⚠️  WARNING: Wallet is NOT safe!")
+        print(f"{Colors.RED}⚠️  ALERT: Total reused R values found: {alert_count}{Colors.END}")
+        print(f"{Colors.RED}⚠️  WARNING: Wallet is NOT safe!{Colors.END}")
         print("="*80)
         
-        # ========== DETAILED OUTPUT SECTION ==========
+        # ========== DETAILED OUTPUT SECTION WITH COLORS ==========
         print("\n" + "="*80)
-        print("📋 FULL DETAILS OF EACH REUSED R VALUE")
+        print(f"{Colors.BOLD}{Colors.RED}📋 FULL DETAILS OF EACH REUSED R VALUE{Colors.END}")
         print("="*80)
         print("\n")
         
         # Display each reused R value pair in detail
         for pair_num, pair in enumerate(reused_pairs, 1):
             print(f"{'='*80}")
-            print(f"🔴 REUSED R VALUE PAIR #{pair_num} of {len(reused_pairs)}")
+            print(f"{Colors.RED}🔴 REUSED R VALUE PAIR #{pair_num} of {len(reused_pairs)}{Colors.END}")
             print(f"{'='*80}")
             
-            print(f"\n🔑 THE REUSED R VALUE:")
-            print(f"   {pair['r_value']}")
+            print(f"\n{Colors.BOLD}🔑 THE REUSED R VALUE:{Colors.END}")
+            print(f"   {Colors.YELLOW}{pair['r_value']}{Colors.END}")
             
-            print(f"\n📤 INPUT 1 (Index #{pair['index1']}):")
-            print(f"   Transaction: {pair['input1']['tx_hash']}")
+            print(f"\n{Colors.BOLD}📤 INPUT 1 (Index #{pair['index1']}):{Colors.END}")
+            print(f"   Transaction: {Colors.RED}{pair['input1']['tx_hash']}{Colors.END}")
             print(f"   Input Index: {pair['input1']['input_index']}")
-            print(f"   R Value: {pair['input1']['r_value']}")
+            print(f"   R Value: {Colors.YELLOW}{pair['input1']['r_value']}{Colors.END}")
             print(f"   Script: {pair['input1']['script'][:100]}..." if len(pair['input1']['script']) > 100 else f"   Script: {pair['input1']['script']}")
             
-            print(f"\n📥 INPUT 2 (Index #{pair['index2']}):")
-            print(f"   Transaction: {pair['input2']['tx_hash']}")
+            print(f"\n{Colors.BOLD}📥 INPUT 2 (Index #{pair['index2']}):{Colors.END}")
+            print(f"   Transaction: {Colors.RED}{pair['input2']['tx_hash']}{Colors.END}")
             print(f"   Input Index: {pair['input2']['input_index']}")
-            print(f"   R Value: {pair['input2']['r_value']}")
+            print(f"   R Value: {Colors.YELLOW}{pair['input2']['r_value']}{Colors.END}")
             print(f"   Script: {pair['input2']['script'][:100]}..." if len(pair['input2']['script']) > 100 else f"   Script: {pair['input2']['script']}")
             
-            print(f"\n⚠️  SECURITY RISK:")
+            print(f"\n{Colors.RED}⚠️  SECURITY RISK:{Colors.END}")
             print(f"   The same R value is used in:")
-            print(f"   • {pair['input1']['tx_hash'][:30]}...")
-            print(f"   • {pair['input2']['tx_hash'][:30]}...")
-            print(f"   This is a CRITICAL vulnerability that can expose the private key!")
+            print(f"   • {Colors.RED}{pair['input1']['tx_hash']}{Colors.END}")
+            print(f"   • {Colors.RED}{pair['input2']['tx_hash']}{Colors.END}")
+            print(f"   {Colors.RED}This is a CRITICAL vulnerability that can expose the private key!{Colors.END}")
             print(f"   🎯 An attacker can calculate the private key from these two signatures.")
             
-            print(f"\n🔗 Transaction Links:")
-            print(f"   https://www.blockchain.com/btc/tx/{pair['input1']['tx_hash']}")
-            print(f"   https://www.blockchain.com/btc/tx/{pair['input2']['tx_hash']}")
+            print(f"\n{Colors.BOLD}🔗 Transaction Links:{Colors.END}")
+            print(f"   {Colors.CYAN}https://www.blockchain.com/btc/tx/{pair['input1']['tx_hash']}{Colors.END}")
+            print(f"   {Colors.CYAN}https://www.blockchain.com/btc/tx/{pair['input2']['tx_hash']}{Colors.END}")
             print("\n")
         
         # Summary of all findings
         print("="*80)
-        print("📊 SUMMARY OF FINDINGS:")
+        print(f"{Colors.BOLD}📊 SUMMARY OF FINDINGS:{Colors.END}")
         print("="*80)
-        print(f"   Total Reused R Values Found: {alert_count}")
+        print(f"   Total Reused R Values Found: {Colors.RED}{alert_count}{Colors.END}")
         print(f"   Total Inputs Analyzed: {len(inputs)}")
         print(f"   Total Comparisons Made: {total_comparisons}")
-        print("\n   Affected Transactions:")
+        print(f"\n   {Colors.BOLD}Affected Transactions:{Colors.END}")
         for pair in reused_pairs:
-            print(f"   • {pair['input1']['tx_hash']}")
-            print(f"   • {pair['input2']['tx_hash']}")
+            print(f"   {Colors.RED}• {pair['input1']['tx_hash']}{Colors.END}")
+            print(f"   {Colors.RED}• {pair['input2']['tx_hash']}{Colors.END}")
         
         # Security Recommendations
         print("\n" + "="*80)
-        print("🚨 URGENT SECURITY RECOMMENDATIONS:")
+        print(f"{Colors.BOLD}{Colors.RED}🚨 URGENT SECURITY RECOMMENDATIONS:{Colors.END}")
         print("="*80)
-        print("   1. ❌ IMMEDIATELY STOP using this wallet!")
-        print("   2. 🏃 Move ALL funds to a new, secure wallet NOW!")
-        print("   3. 🔒 Generate a new wallet with a strong random seed")
-        print("   4. 🗑️  Never reuse this address or its private key again")
-        print("   5. ⚡ The private key may already be compromised")
+        print(f"   {Colors.RED}1. ❌ IMMEDIATELY STOP using this wallet!{Colors.END}")
+        print(f"   {Colors.RED}2. 🏃 Move ALL funds to a new, secure wallet NOW!{Colors.END}")
+        print(f"   {Colors.YELLOW}3. 🔒 Generate a new wallet with a strong random seed{Colors.END}")
+        print(f"   {Colors.YELLOW}4. 🗑️  Never reuse this address or its private key again{Colors.END}")
+        print(f"   {Colors.RED}5. ⚡ The private key may already be compromised{Colors.END}")
         print("="*80)
 
 if __name__ == "__main__":
