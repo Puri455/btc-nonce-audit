@@ -40,9 +40,12 @@ def get_address_data(address):
     """Fetch address data from blockchain.info"""
     url = f"https://blockchain.info/rawaddr/{address}"
     try:
+        print(f"📡 Fetching data from: {url}")
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        print(f"✅ Data received successfully!")
+        return data
     except requests.exceptions.RequestException as e:
         print(f"\n❌ Error fetching data: {e}")
         print("Please check your internet connection or the Bitcoin address.")
@@ -59,14 +62,20 @@ def main():
     print_logo()
     print("WELCOME TO Reused R Scanner 0.3!\n")
     
-    address = input("Enter the Bitcoin address to scan: ").strip()
+    # Get address input with proper prompt
+    print("Enter the Bitcoin address to scan: ", end="", flush=True)
+    address = sys.stdin.readline().strip()
+    
     if not address:
         print("❌ Address cannot be empty!")
         sys.exit(1)
     
-    print(f"📡 Fetching data for address: {address}")
+    print(f"\n🔍 Scanning address: {address}")
     
     address_data = get_address_data(address)
+    
+    # Debug: Show what we received
+    # print(f"Debug: API Response Keys: {address_data.keys()}")
     
     # Check if the response contains expected data
     if 'error' in address_data:
@@ -80,10 +89,10 @@ def main():
         num_txs = len(address_data['txs'])
     else:
         print("❌ Unexpected API response format. Cannot process transactions.")
-        print("Raw response:", json.dumps(address_data, indent=2)[:500])
+        print("API Response Structure:", json.dumps(list(address_data.keys()), indent=2))
         sys.exit(1)
     
-    print(f"\n✅ Data for address: {address}")
+    print(f"\n✅ Address: {address}")
     print(f"📊 Number of transactions: {num_txs}\n")
 
     if num_txs == 0:
@@ -162,7 +171,7 @@ def main():
             print(f"{'='*80}")
             print(f"🔴 REUSED R VALUE PAIR #{pair_num} OF {len(reused_pairs)}")
             print(f"{'='*80}")
-            print(f"🔑 R Value (first 64 chars): {pair['r_value']}")
+            print(f"🔑 R Value: {pair['r_value']}")
             print("\n" + "-"*40)
             print("📤 INPUT 1 DETAILS:")
             print("-"*40)
@@ -181,8 +190,8 @@ def main():
             print("⚠️  SECURITY ANALYSIS:")
             print("-"*40)
             print(f"  ⚠️  Same R value used in transactions:")
-            print(f"     • {pair['input1']['tx_hash'][:20]}...")
-            print(f"     • {pair['input2']['tx_hash'][:20]}...")
+            print(f"     • {pair['input1']['tx_hash']}")
+            print(f"     • {pair['input2']['tx_hash']}")
             print(f"  🔓 This means the same random nonce (R value) was reused")
             print(f"  💀 This is a CRITICAL security vulnerability!")
             print(f"  🎯 An attacker could potentially recover the private key")
@@ -208,5 +217,7 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(f"\n❌ An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
         print("Please try again or check the address format.")
         sys.exit(1)
